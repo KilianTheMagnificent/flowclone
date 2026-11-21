@@ -1,0 +1,17 @@
+Parakeet Ultra
+
+FlowClone uses Parakeet Ultra by Moondream, a post-trained derivative of
+NVIDIA's Parakeet TDT 0.6B v3, through FluidInference's Core ML conversion.
+
+Original model and attribution:
+https://huggingface.co/moondream/parakeet-ultra
+
+Core ML conversion used by FluidAudio:
+https://huggingface.co/FluidInference/parakeet-ultra-coreml
+
+Model license: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+The Core ML conversion changes the model representation and quantizes the
+encoder. FlowClone does not further modify the model weights. This notice
+does not imply endorsement of FlowClone by the model authors.
