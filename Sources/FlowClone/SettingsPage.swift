@@ -38,6 +38,7 @@ struct SettingsPage: View {
     @State private var mode = Mode.current
     @State private var speechEngine = SpeechEngine.preferred
     @State private var livePartial = Overlay.livePartialEnabled
+    @State private var idlePill = Overlay.idlePillEnabled
     @State private var keepOnClipboard = Paster.keepsLastDictation
     @State private var codingContext = UserDefaults.standard.bool(forKey: "localCodingContext")
     @State private var autoLearn = UserDefaults.standard.object(forKey: "autoLearn") as? Bool ?? true
@@ -282,6 +283,17 @@ struct SettingsPage: View {
                         }
                 }
                 SettingGroup {
+                    Toggle("Show idle pill", isOn: $idlePill)
+                        .accessibilityIdentifier("showIdlePill")
+                        .onChange(of: idlePill) { _, new in
+                            if new != Overlay.idlePillEnabled {
+                                Overlay.idlePillEnabled = new
+                                log("idle pill = \(new)")
+                                Overlay.shared.applyIdleSetting()
+                            }
+                        }
+                }
+                SettingGroup {
                     Toggle("Keep last dictation on clipboard", isOn: $keepOnClipboard)
                         .accessibilityIdentifier("keepDictationOnClipboard")
                         .onChange(of: keepOnClipboard) { _, new in
@@ -496,7 +508,7 @@ struct SettingsPage: View {
         guard MainWindow.shared.isVisible else { return }
         tick += 1
         if AXIsProcessTrusted() { Permissions.onHotkeyRearm() }
-        mode = Mode.current; livePartial = Overlay.livePartialEnabled; updateStatus = Updater.status
+        mode = Mode.current; livePartial = Overlay.livePartialEnabled; idlePill = Overlay.idlePillEnabled; updateStatus = Updater.status
         keepOnClipboard = Paster.keepsLastDictation   // the menu bar checkbox may have changed it
         smartCorrectionsOn = RepairReviewer.enabled; smartCorrections = RepairReviewer.choice   // likewise
         claudeKeySaved = ClaudeKey.current != nil

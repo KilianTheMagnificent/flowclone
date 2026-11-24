@@ -47,6 +47,14 @@ enum MeetingAttention: Equatable {
     var isImporting = false
     var searchIndexVersion = 0
     var processing: Set<UUID> = []
+    var publishingToGitHub: Set<UUID> = []
+    var githubConfig: GitHubPublishConfig
+    var githubConnected = false
+    var githubConnecting = false
+    var githubLoadingRepos = false
+    var githubRepos: [GitHubRepositorySummary] = []
+    var githubStatus = ""
+    var githubError: String?
     var countdown: MeetingEvent?
     var countdownEnd: Date?
     var suspended = false
@@ -68,6 +76,7 @@ enum MeetingAttention: Equatable {
     private let transcriber: any MeetingTranscribing
     private let summarizer: any MeetingSummarizing
     private let callDetector: (any MeetingCallDetecting)?
+    private let githubPublisher: any MeetingGitHubPublishing
     let store: MeetingStore
     private let defaults: UserDefaults
     @ObservationIgnored private var timer: Timer?
@@ -77,6 +86,8 @@ enum MeetingAttention: Equatable {
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var finalizers: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var githubTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var githubRetryAttempts: [UUID: (count: Int, next: Date)] = [:]
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var lastSync: Date = .distantPast
     @ObservationIgnored private var lastSuccess: Date = .distantPast
@@ -126,11 +137,13 @@ enum MeetingAttention: Equatable {
          transcriber: any MeetingTranscribing, summarizer: any MeetingSummarizing,
          store: MeetingStore, defaults: UserDefaults = .standard,
          callDetector: (any MeetingCallDetecting)? = nil,
+         githubPublisher: any MeetingGitHubPublishing = GitHubMeetingPublisher(),
          trace: @escaping @MainActor (String) -> Void = { log($0) },
          notify: @escaping @MainActor (String) -> Void = { notifyUser($0) }) {
         self.calendar = calendar; self.capture = capture; self.transcriber = transcriber
         self.summarizer = summarizer; self.store = store; self.defaults = defaults
-        self.callDetector = callDetector; self.trace = trace; self.notify = notify
+        self.callDetector = callDetector; self.githubPublisher = githubPublisher
+        self.trace = trace; self.notify = notify
         selectedCalendars = Set(defaults.stringArray(forKey: "meetingCalendarIDs") ?? [])
         autoStart = defaults.bool(forKey: "meetingAutoStart")
         autoDetectCalls = defaults.object(forKey: "meetingAutoDetectCalls") as? Bool ?? true
@@ -139,6 +152,21 @@ enum MeetingAttention: Equatable {
         consentConfirmed = defaults.bool(forKey: "meetingConsent")
         dismissed = Set(defaults.stringArray(forKey: "meetingDismissedEvents") ?? [])
         included = Set(defaults.stringArray(forKey: "meetingIncludedEvents") ?? [])
+        if let data = defaults.data(forKey: GitHubPublishConfig.defaultsKey),
+           let decoded = try? JSONDecoder().decode(GitHubPublishConfig.self, from: data) {
+            githubConfig = decoded
+        } else {
+            githubConfig = GitHubPublishConfig()
+        }
+        switch githubPublisher.tokenLoadState() {
+        case .found:
+            githubConnected = true
+        case .missing:
+            githubConnected = false
+        case .unavailable:
+            // Preserve last known connected state if Keychain is momentarily locked at login/wake.
+            githubConnected = githubConfig.connectedUsername != nil || githubConfig.isConfigured
+        }
         calendarSource = calendar.source; account = calendar.account
     }
     var selectedNote: MeetingNote? {
@@ -150,7 +178,7 @@ enum MeetingAttention: Equatable {
         return notes.first { $0.id == activeID }
     }
     var busy: Bool { activeID != nil || isStarting || isStopping }
-    var blocksUpdate: Bool { busy || countdown != nil || !processing.isEmpty || isImporting }
+    var blocksUpdate: Bool { busy || countdown != nil || !processing.isEmpty || !publishingToGitHub.isEmpty || isImporting }
     private var watchesForAutomaticMeetings: Bool {
         autoStart && consentConfirmed && !selectedCalendars.isEmpty
     }
@@ -202,6 +230,10 @@ enum MeetingAttention: Equatable {
         if isUIActive && (connected || !selectedCalendars.isEmpty) {
             return 15
         }
+        if githubConfig.autoPublish && githubConnected && githubConfig.isConfigured
+            && notes.contains(where: { $0.githubPublish?.status == .pendingRetry }) {
+            return 15
+        }
         return nil
     }
 
@@ -240,6 +272,15 @@ enum MeetingAttention: Equatable {
         load()
         guard !suppressHostAccess, !launched else { return }
         launched = true
+        let tokenState = githubPublisher.tokenLoadState()
+        let tokenStatus: String = switch tokenState {
+        case .found: "found"
+        case .missing: "missing"
+        case .unavailable(let status): "unavailable(\(status))"
+        }
+        if tokenStatus != "missing" || githubConfig.isConfigured {
+            trace("meeting github: startup token=\(tokenStatus) configured=\(githubConfig.isConfigured) auto=\(githubConfig.autoPublish)")
+        }
         updateLiveCallMonitoring()
         updateTimerSchedule()
         let center = NSWorkspace.shared.notificationCenter
@@ -593,6 +634,7 @@ enum MeetingAttention: Equatable {
             catch { syncFailed(error, now: now) }
         }
         await evaluateLiveCall(now: now)
+        retryPendingGitHubPublishes(now: now)
         if let active = activeNote {
             // Calendar edits can extend the current occurrence; missing/cancelled events stop capture.
             if connected, let updated = upcoming.first(where: { $0.id == active.event.id }), updated != active.event {
@@ -962,16 +1004,18 @@ enum MeetingAttention: Equatable {
             self?.finalizers[id] = nil
         }
     }
-    /// Waits for summaries started by the scheduler (tests, quit draining, and the hands-free mock).
+    /// Waits for summaries and GitHub uploads started by the scheduler (tests, quit draining, and the hands-free mock).
     func settle(timeout: TimeInterval? = nil) async {
         flushPendingSaves()
         guard let timeout else {
-            while let task = finalizers.values.first { await task.value }
+            while let task = finalizers.values.first ?? githubTasks.values.first {
+                await task.value
+            }
             flushPendingSaves()
             return
         }
         let deadline = Date().addingTimeInterval(timeout)
-        while (!finalizers.isEmpty || !processing.isEmpty), Date() < deadline {
+        while (!finalizers.isEmpty || !processing.isEmpty || !githubTasks.isEmpty || !publishingToGitHub.isEmpty), Date() < deadline {
             try? await Task.sleep(for: .milliseconds(5))
         }
         flushPendingSaves()
@@ -1030,6 +1074,9 @@ enum MeetingAttention: Equatable {
         searchBodyCache[id] = nil
         if let saved = notes.first(where: { $0.id == id }) {
             trace("meeting: saved phase=\(saved.phase.rawValue) segments=\(saved.segments.count) transcript=\(saved.transcript.split(separator: " ").count) words summary=\(saved.summary.split(separator: " ").count) words (\(saved.summaryMethod))")
+            if shouldAutoPublishToGitHub(saved) {
+                publishToGitHubLater(id, automatic: true)
+            }
         }
         if error == nil, activeID == nil, countdown == nil, !isStarting { status = "Meeting saved." }
     }
@@ -1228,7 +1275,10 @@ enum MeetingAttention: Equatable {
         }
     }
     func delete(_ id: UUID) {
-        guard activeID != id, !processing.contains(id), worker == nil else { return }
+        guard activeID != id, !processing.contains(id), !publishingToGitHub.contains(id), worker == nil else { return }
+        githubTasks[id]?.cancel()
+        githubTasks[id] = nil
+        githubRetryAttempts[id] = nil
         pendingNoteSaves.remove(id)
         searchBodyCache[id] = nil
         searchWarmingIDs.remove(id)
@@ -1238,6 +1288,316 @@ enum MeetingAttention: Equatable {
             refreshRecordedEventIDs()
             if selectedNoteID == id { selectedNoteID = nil }
         } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: - GitHub Publishing
+
+    /// Maximum automatic retry attempts when GitHub is temporarily unreachable.
+    static let maxGitHubAutoRetries = 6
+
+    func saveGitHubConfig() {
+        if let cleanFolder = GitHubPublishConfig.validatedFolder(githubConfig.folder) {
+            githubConfig.folder = cleanFolder
+        }
+        if let cleanBranch = GitHubPublishConfig.validatedBranch(githubConfig.branch) {
+            githubConfig.branch = cleanBranch
+        }
+        if let encoded = try? JSONEncoder().encode(githubConfig) {
+            defaults.set(encoded, forKey: GitHubPublishConfig.defaultsKey)
+        }
+        updateTimerSchedule()
+    }
+
+    func refreshGitHubConnectionState() {
+        switch githubPublisher.tokenLoadState() {
+        case .found:
+            githubConnected = true
+        case .missing:
+            githubConnected = false
+        case .unavailable:
+            break
+        }
+    }
+
+    func connectGitHub(token rawToken: String) async {
+        guard !githubConnecting else { return }
+        guard let normalized = GitHubTokenValidator.normalized(rawToken) else {
+            githubError = "Paste a valid GitHub personal access token."
+            return
+        }
+        githubConnecting = true
+        githubError = nil
+        githubStatus = "Checking GitHub token…"
+        defer { githubConnecting = false }
+        do {
+            let username = try await githubPublisher.verifyToken(normalized)
+            guard githubPublisher.saveToken(normalized) else {
+                githubError = "Your GitHub token could not be saved to this Mac’s Keychain."
+                githubStatus = ""
+                return
+            }
+            githubConnected = true
+            githubConfig.connectedUsername = username
+            saveGitHubConfig()
+            trace("meeting github: connected")
+            githubStatus = "Connected as @\(username)."
+            await refreshGitHubRepositories()
+            if githubConfig.repository.isEmpty, githubRepos.count == 1, let onlyRepo = githubRepos.first {
+                githubConfig.repository = onlyRepo.fullName
+                githubConfig.defaultBranchCache = onlyRepo.defaultBranch
+                saveGitHubConfig()
+                githubStatus = "Ready to publish to \(onlyRepo.fullName) (\(onlyRepo.defaultBranch))."
+            } else if let existingRepo = githubConfig.parsedRepo {
+                if let verified = try? await githubPublisher.verifyRepository(existingRepo) {
+                    githubConfig.repository = verified.fullName
+                    githubConfig.defaultBranchCache = verified.defaultBranch
+                    saveGitHubConfig()
+                    githubStatus = "Ready to publish to \(verified.fullName) (\(githubConfig.displayBranch))."
+                }
+            }
+        } catch {
+            githubError = error.localizedDescription
+            githubStatus = ""
+        }
+    }
+
+    func disconnectGitHub() {
+        githubPublisher.clearToken()
+        githubConnected = false
+        githubRepos = []
+        githubRetryAttempts.removeAll()
+        githubConfig.connectedUsername = nil
+        githubConfig.autoPublish = false
+        saveGitHubConfig()
+        githubError = nil
+        githubStatus = "Disconnected from GitHub."
+        trace("meeting github: disconnected")
+    }
+
+    func refreshGitHubRepositories() async {
+        guard githubConnected, !githubLoadingRepos else { return }
+        githubLoadingRepos = true
+        defer { githubLoadingRepos = false }
+        do {
+            let repos = try await githubPublisher.listRepositories()
+            githubRepos = repos
+            if let current = githubConfig.parsedRepo,
+               let match = repos.first(where: { $0.fullName.caseInsensitiveCompare(current.fullName) == .orderedSame }) {
+                githubConfig.defaultBranchCache = match.defaultBranch
+                saveGitHubConfig()
+            }
+        } catch let failure as GitHubPublishFailure {
+            // Single-repo fine-grained tokens may still work with a typed owner/repo even if /user/repos fails.
+            if failure.statusCode == 401 {
+                githubError = failure.localizedDescription
+            }
+            trace("meeting github: repo list failed (status=\(failure.statusCode ?? 0))")
+        } catch {
+            trace("meeting github: repo list failed")
+        }
+    }
+
+    @discardableResult
+    func configureGitHubRepository(_ rawRepo: String, branch: String? = nil, folder: String? = nil) async -> Bool {
+        githubError = nil
+        guard let repo = GitHubRepoID.parse(rawRepo) else {
+            githubError = "Enter a GitHub repository like owner/repo or paste its github.com URL."
+            return false
+        }
+        let nextFolder: String
+        if let folder {
+            guard let validated = GitHubPublishConfig.validatedFolder(folder) else {
+                githubError = "Folder path can’t contain “..”, backslashes, or special URL characters."
+                return false
+            }
+            nextFolder = validated
+        } else {
+            nextFolder = githubConfig.folder
+        }
+        let nextBranch: String
+        if let branch {
+            guard let validated = GitHubPublishConfig.validatedBranch(branch) else {
+                githubError = "Branch name isn’t valid. Leave it blank to use the repository’s default branch."
+                return false
+            }
+            nextBranch = validated
+        } else {
+            nextBranch = githubConfig.branch
+        }
+        githubConnecting = true
+        githubStatus = "Checking access to \(repo.fullName)…"
+        defer { githubConnecting = false }
+        do {
+            let verified = try await githubPublisher.verifyRepository(repo)
+            githubConfig.repository = verified.fullName
+            githubConfig.defaultBranchCache = verified.defaultBranch
+            githubConfig.folder = nextFolder
+            githubConfig.branch = nextBranch
+            saveGitHubConfig()
+            if !githubRepos.contains(where: { $0.fullName.caseInsensitiveCompare(verified.fullName) == .orderedSame }) {
+                githubRepos.insert(verified, at: 0)
+            }
+            githubStatus = "Verified \(verified.fullName) (\(githubConfig.displayBranch))."
+            trace("meeting github: verified repository")
+            return true
+        } catch {
+            githubError = error.localizedDescription
+            githubStatus = ""
+            return false
+        }
+    }
+
+    func hasUnsyncedGitHubChanges(for note: MeetingNote) -> Bool {
+        guard let state = note.githubPublish, state.status == .published else { return false }
+        if let target = githubConfig.parsedRepo,
+           state.repository.caseInsensitiveCompare(target.fullName) != .orderedSame {
+            return true
+        }
+        let cleanBranch = GitHubPublishConfig.validatedBranch(githubConfig.branch) ?? ""
+        if state.branch != cleanBranch {
+            return true
+        }
+        guard let publishedHash = state.contentHash else { return true }
+        return MeetingGitHubDocument.contentHash(
+            for: note,
+            includeTranscript: githubConfig.includeTranscript
+        ) != publishedHash
+    }
+
+    private func shouldAutoPublishToGitHub(_ note: MeetingNote) -> Bool {
+        guard githubConfig.autoPublish, githubConnected, githubConfig.isConfigured else { return false }
+        guard note.phase == .complete else { return false }
+        let hasContent = !note.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !note.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !note.personalNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasContent else { return false }
+        if let existing = note.githubPublish, existing.status == .published {
+            return hasUnsyncedGitHubChanges(for: note)
+        }
+        return true
+    }
+
+    private func publishToGitHubLater(_ id: UUID, automatic: Bool, now: Date = Date()) {
+        guard publishingToGitHub.insert(id).inserted else { return }
+        githubTasks[id] = Task { [weak self] in
+            await self?.runGitHubPublish(id, automatic: automatic, now: now)
+            self?.githubTasks[id] = nil
+        }
+    }
+
+    /// Manually publishes (or updates) a meeting note to the configured GitHub repository.
+    func publishNoteToGitHub(_ id: UUID) async {
+        flushPendingSaves()
+        guard notes.contains(where: { $0.id == id }), !processing.contains(id) else { return }
+        if let inFlight = githubTasks[id] {
+            await inFlight.value
+            return
+        }
+        guard publishingToGitHub.insert(id).inserted else { return }
+        let task = Task { [weak self] in
+            await self?.runGitHubPublish(id, automatic: false)
+            self?.githubTasks[id] = nil
+        }
+        githubTasks[id] = task
+        await task.value
+    }
+
+    private func runGitHubPublish(_ id: UUID, automatic: Bool, now: Date = Date()) async {
+        defer {
+            publishingToGitHub.remove(id)
+            updateTimerSchedule()
+        }
+        flushPendingSaves()
+        guard let note = notes.first(where: { $0.id == id }) else { return }
+        let config = githubConfig
+        guard githubConnected, config.isConfigured else {
+            if !automatic {
+                githubError = "Connect GitHub and choose a repository first in Meetings → GitHub."
+            }
+            return
+        }
+        githubError = nil
+        do {
+            let result = try await githubPublisher.publish(note: note, config: config)
+            githubRetryAttempts[id] = nil
+            mutate(id) { target in
+                target.githubPublish = MeetingGitHubState(
+                    status: .published,
+                    repository: result.repository,
+                    branch: result.branch,
+                    resolvedBranch: result.resolvedBranch,
+                    path: result.path,
+                    sha: result.sha,
+                    commitSHA: result.commitSHA,
+                    htmlURL: result.htmlURL,
+                    publishedAt: result.publishedAt,
+                    contentHash: result.contentHash,
+                    error: nil
+                )
+            }
+            githubStatus = "Published to \(result.repository)."
+            trace("meeting github: published note (automatic=\(automatic))")
+        } catch let failure as GitHubPublishFailure {
+            handleGitHubPublishFailure(id: id, failure: failure, config: config, automatic: automatic, now: now)
+        } catch {
+            let wrapped = GitHubPublishFailure(error.localizedDescription, isTransient: false)
+            handleGitHubPublishFailure(id: id, failure: wrapped, config: config, automatic: automatic, now: now)
+        }
+    }
+
+    private func handleGitHubPublishFailure(
+        id: UUID,
+        failure: GitHubPublishFailure,
+        config: GitHubPublishConfig,
+        automatic: Bool,
+        now: Date
+    ) {
+        let attempts = (githubRetryAttempts[id]?.count ?? 0) + 1
+        let canAutoRetry = automatic && failure.isTransient && attempts < Self.maxGitHubAutoRetries
+        if canAutoRetry {
+            let delay = min(600.0, 30.0 * pow(2.0, Double(attempts - 1)))
+            githubRetryAttempts[id] = (attempts, now.addingTimeInterval(delay))
+        } else {
+            githubRetryAttempts[id] = nil
+        }
+
+        let targetRepo = config.parsedRepo?.fullName ?? config.repository
+        let explicitBranch = GitHubPublishConfig.validatedBranch(config.branch) ?? ""
+        mutate(id) { target in
+            let prior = target.githubPublish
+            let sameTarget = prior.map {
+                $0.repository.caseInsensitiveCompare(targetRepo) == .orderedSame && $0.branch == explicitBranch
+            } ?? false
+            target.githubPublish = MeetingGitHubState(
+                status: canAutoRetry ? .pendingRetry : .failed,
+                repository: sameTarget ? (prior?.repository ?? targetRepo) : targetRepo,
+                branch: sameTarget ? (prior?.branch ?? explicitBranch) : explicitBranch,
+                resolvedBranch: sameTarget ? (prior?.resolvedBranch ?? config.displayBranch) : config.displayBranch,
+                path: sameTarget ? (prior?.path ?? "") : "",
+                sha: sameTarget ? prior?.sha : nil,
+                commitSHA: sameTarget ? prior?.commitSHA : nil,
+                htmlURL: sameTarget ? prior?.htmlURL : nil,
+                publishedAt: sameTarget ? prior?.publishedAt : nil,
+                contentHash: sameTarget ? prior?.contentHash : nil,
+                error: failure.localizedDescription
+            )
+        }
+        githubError = failure.localizedDescription
+        trace("meeting github: publish failed (automatic=\(automatic) transient=\(failure.isTransient) status=\(failure.statusCode ?? 0))")
+        if automatic, !canAutoRetry {
+            notifyOnce("Could not publish meeting note to GitHub: \(failure.localizedDescription)")
+        }
+    }
+
+    private func retryPendingGitHubPublishes(now: Date) {
+        guard githubConfig.autoPublish, githubConnected, githubConfig.isConfigured else { return }
+        for note in notes where note.githubPublish?.status == .pendingRetry {
+            guard !publishingToGitHub.contains(note.id), !processing.contains(note.id) else { continue }
+            if let attempt = githubRetryAttempts[note.id], now < attempt.next {
+                continue
+            }
+            publishToGitHubLater(note.id, automatic: true, now: now)
+        }
     }
     private func traceOnce(_ message: String) {
         guard message != lastTrace else { return }

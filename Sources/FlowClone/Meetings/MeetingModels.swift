@@ -179,6 +179,8 @@ struct MeetingNote: Codable, Equatable, Identifiable, Sendable {
     var userRenamedTitle = false
     /// Whether this meeting records call audio (mic + system) or an in-person room conversation (mic only).
     var captureMode: MeetingCaptureMode = .call
+    /// Persisted GitHub publishing status/path/SHA for automatic and manual updates.
+    var githubPublish: MeetingGitHubState? = nil
 
     var isInPerson: Bool { captureMode == .inPerson || event.isInPerson }
 
@@ -196,7 +198,8 @@ struct MeetingNote: Codable, Equatable, Identifiable, Sendable {
         autoResume: Bool? = nil,
         completedActionItems: Set<String> = [],
         userRenamedTitle: Bool = false,
-        captureMode: MeetingCaptureMode? = nil
+        captureMode: MeetingCaptureMode? = nil,
+        githubPublish: MeetingGitHubState? = nil
     ) {
         self.id = id
         self.event = event
@@ -212,12 +215,13 @@ struct MeetingNote: Codable, Equatable, Identifiable, Sendable {
         self.completedActionItems = completedActionItems
         self.userRenamedTitle = userRenamedTitle
         self.captureMode = captureMode ?? (event.isInPerson ? .inPerson : .call)
+        self.githubPublish = githubPublish
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, event, startedAt, endedAt, phase, segments
         case personalNotes, summary, summaryMethod, issue, autoResume
-        case completedActionItems, userRenamedTitle, captureMode
+        case completedActionItems, userRenamedTitle, captureMode, githubPublish
     }
 
     init(from decoder: Decoder) throws {
@@ -237,6 +241,7 @@ struct MeetingNote: Codable, Equatable, Identifiable, Sendable {
         userRenamedTitle = try c.decodeIfPresent(Bool.self, forKey: .userRenamedTitle) ?? false
         captureMode = try c.decodeIfPresent(MeetingCaptureMode.self, forKey: .captureMode)
             ?? (event.isInPerson ? .inPerson : .call)
+        githubPublish = try c.decodeIfPresent(MeetingGitHubState.self, forKey: .githubPublish)
     }
 
     var orderedSegments: [MeetingSegment] {

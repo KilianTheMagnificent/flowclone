@@ -56,8 +56,9 @@ avoids that; this route does not:
 ## What leaves the Mac
 
 Without a Claude API key: nothing you say. Speech recognition, cleanup and summaries run on
-the Mac; the app only downloads its speech model and its own updates, and reads your
-calendar if you connect one.
+the Mac; the app only downloads its speech model and its own updates, reads your calendar if
+you connect one, and uploads meeting notes to GitHub only if you connect a GitHub repository
+and turn on publishing.
 
 With your own key saved (Settings > Dictation > Smart corrections), text is sent to
 Anthropic over HTTPS: a Clean dictation that needs more than basic cleanup (short, already
@@ -94,7 +95,7 @@ What happens without you:
 
 Still yours to do: keep FlowClone running (it opens at login) and the Mac awake or woken during the meeting; leave early with **Stop and summarize** if you do not want the rest. While the Google project is in Testing, Google ends the sign-in every 7 days ([details](docs/meeting-notes/google-sign-in.md)); macOS asks about once a month to keep allowing screen and system-audio recording. Local speech recognition is English. Remote speakers share a system-audio label.
 
-The meeting view contains Summary, Transcript and My notes, with local Markdown export, resume, retry and deletion (including audio). Notes and recoverable audio stay in `~/Library/Application Support/FlowClone/Meetings` until deleted. Summaries use an on-device model when available and clearly labeled key excerpts otherwise.
+The meeting view contains Summary, Transcript and My notes, with local Markdown export, optional automatic publishing to any GitHub repository (using a personal access token stored in your Mac's Keychain), resume, retry and deletion (including audio). Notes and recoverable audio stay in `~/Library/Application Support/FlowClone/Meetings` until deleted. Summaries use an on-device model when available and clearly labeled key excerpts otherwise.
 
 Hands-free mock: start the hidden test app with `tools/handsfree-flowclone.sh --with-model`, then use `meeting-mock` with `{"audio":["/absolute/alex.aiff","/absolute/maya.aiff"],"output":"/absolute/scratch/output"}`. It simulates calendar time and audio hardware, runs the production audio writer, local recognizer, summarizer and storage, and renders the Meetings page. Poll `meeting-result`. It never reads your calendar or microphone.
 

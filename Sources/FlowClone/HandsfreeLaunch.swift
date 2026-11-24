@@ -133,6 +133,12 @@ enum HandsfreeLaunch {
             MeetingMock.showDisconnectedCalendar(in: profile.appendingPathComponent("meeting-disconnected"))
             return "Mock Google Calendar disconnection"
         }
+        Handsfree.actions["meeting-github-demo"] = { _ in
+            guard let profile = Handsfree.profile else { throw failure("test profile unavailable") }
+            try MeetingMock.showGitHubDemo(in: profile.appendingPathComponent("meeting-github-demo"))
+            MainWindow.shared.show(.meetings)
+            return "Mock GitHub meeting demo"
+        }
 
         Handsfree.actions["page"] = { payload in
             guard let page = (payload["name"] as? String).flatMap(MainWindow.Page.init(rawValue:)) else {

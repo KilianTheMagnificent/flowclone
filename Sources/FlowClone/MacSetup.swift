@@ -345,11 +345,12 @@ struct SetupWarnings: View {
     }
 }
 
-/// Settings › This Mac: the speech model, Apple Intelligence, and opening at login.
+/// Settings › This Mac: opening at login, menu bar icon, the speech model, and Apple Intelligence.
 struct MacSetupSettings: View {
     @Bindable private var model = SpeechModelState.shared
     @State private var openAtLogin = LaunchAtLogin.wanted()
     @State private var loginStatus = SMAppService.mainApp.status
+    @State private var showMenuBarIcon = StatusMenu.showMenuBarIcon
     @State private var intelligence = AppleIntelligenceStatus.current
 
     var body: some View {
@@ -376,6 +377,17 @@ struct MacSetupSettings: View {
                             }
                         }
                     }
+                }
+                SettingGroup {
+                    Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                        .accessibilityIdentifier("showMenuBarIcon")
+                        .onChange(of: showMenuBarIcon) { _, new in
+                            guard new != StatusMenu.showMenuBarIcon else { return }
+                            StatusMenu.shared.setMenuBarIconVisible(new)
+                        }
+                    SettingCaption(showMenuBarIcon
+                        ? "Shows FlowClone’s waveform icon in the top menu bar."
+                        : "FlowClone keeps running in the background. Open it from Spotlight, Applications, or the pill to show this window.")
                 }
                 SettingGroup {
                     Text("Speech model").fontWeight(.medium)
@@ -417,6 +429,7 @@ struct MacSetupSettings: View {
     private func refresh() {
         loginStatus = SMAppService.mainApp.status
         openAtLogin = LaunchAtLogin.wanted()
+        showMenuBarIcon = StatusMenu.showMenuBarIcon
         intelligence = AppleIntelligenceStatus.current
     }
 }

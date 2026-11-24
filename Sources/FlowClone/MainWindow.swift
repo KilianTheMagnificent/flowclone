@@ -323,7 +323,7 @@ struct HelpPage: View {
                 SectionCard("Dictate into any app") {
                     prose("Hold fn in any text field, speak, then release.")
                     example("Try", ["Let’s meet tomorrow at ten."])
-                    prose("Closing this window keeps FlowClone running in the menu bar.")
+                    prose("Closing this window keeps FlowClone running in the background.")
                 }
                 SectionCard("Shortcuts") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -360,7 +360,7 @@ struct HelpPage: View {
                 }
                 SectionCard("Troubleshooting") {
                     problem("No recording?", "Check Permissions in Settings, then relaunch after granting access.")
-                    problem("Text did not paste?", "Choose Paste last dictation from the menu bar, or Retry if audio was saved.")
+                    problem("Text did not paste?", "Open FlowClone to copy or retry your last dictation from History, or turn on the menu bar icon in Settings.")
                     problem("Check or exclamation mark on the pill?", "A check means ready: release and press again. An exclamation mark means recording could not start.")
                 }
                 DisclosureGroup("Files & logs") {

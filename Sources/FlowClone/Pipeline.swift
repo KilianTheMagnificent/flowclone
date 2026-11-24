@@ -432,7 +432,7 @@ final class Pipeline: @unchecked Sendable {   // state is confined to `queue`
 
     /// The failure banner says why, so "Retry" is not the only thing a person can try.
     static func speechModelFailureNotice(_ problem: SpeechModelProblem) -> String {
-        "\(problem.message) Retry is in Settings › This Mac and in the menu bar menu."
+        "\(problem.message) Retry is in Settings › This Mac."
     }
 
     /// Menu action after automatic retries are exhausted.

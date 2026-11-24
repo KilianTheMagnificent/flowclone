@@ -7,11 +7,12 @@ permission, and optionally Calendar and Screen & System Audio Recording. It:
 
 - records speech, and with meeting notes on, meeting audio, and transcribes it on the Mac;
 - pastes text into the app you are using, and refuses to dictate into password fields;
-- keeps secrets only in the macOS Keychain: your own Anthropic API key and, if you sign in
-  with Google, a read-only Calendar token;
+- keeps secrets only in the macOS Keychain: your own Anthropic API key, if you sign in
+  with Google a read-only Calendar token, and if you connect GitHub your personal access token;
 - sends text to Anthropic only when you have saved your own API key (see "What leaves the
-  Mac" in the [README](README.md)), reads Google Calendar if you connect it, and downloads
-  its speech model and its own updates;
+  Mac" in the [README](README.md)), reads Google Calendar if you connect it, publishes
+  meeting notes to GitHub only when you connect a repository, and downloads its speech model
+  and its own updates;
 - updates itself from GitHub Releases, installing only a build signed by the same Apple
   developer team as the running one.
 

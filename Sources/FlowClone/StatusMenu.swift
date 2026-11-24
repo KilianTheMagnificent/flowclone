@@ -7,9 +7,21 @@ import Cocoa
 @MainActor
 final class StatusMenu: NSObject, NSMenuDelegate {
     static let shared = StatusMenu()
+    nonisolated static let showMenuBarIconKey = "showMenuBarIcon"
     private static var testImmediateActions = false
     private static let normalSymbol = "waveform"
     private static let learnedSymbol = "checkmark.circle.fill"
+
+    /// Hidden by default so FlowClone stays out of the top menu bar while dictation,
+    /// shortcuts, the pill, and meetings keep running. Toggleable in Settings › This Mac.
+    nonisolated static var showMenuBarIcon: Bool {
+        get { showMenuBarIcon(in: .standard) }
+        set { UserDefaults.standard.set(newValue, forKey: showMenuBarIconKey) }
+    }
+
+    nonisolated static func showMenuBarIcon(in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: showMenuBarIconKey)
+    }
 
     /// Wired by the app delegate.
     var sessionActive: () -> Bool = { false }
@@ -26,8 +38,11 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     var onTransform: () -> Void = {}
     var onUndoTransform: () -> Void = {}
 
+    private let defaults: UserDefaults
     private let menu = NSMenu()
     private var statusItem: NSStatusItem?
+    private var installed = false
+    var isVisible: Bool { statusItem != nil }
     private var learnedSignalGeneration = 0
     private var meetingTitle: String?
     private var meetingPending = false
@@ -56,7 +71,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private lazy var updateItem = item("Check for updates", #selector(checkForUpdates))
     private let updateStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
-    private override init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false   // enablement is computed in refresh(), not guessed
@@ -126,13 +142,31 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// Puts the item in the menu bar. Idempotent — `--menutest` calls it too.
+    /// Registers the status-bar controller and puts the item in the menu bar only when
+    /// `showMenuBarIcon` is enabled. Idempotent — `--menutest` calls it too.
     func install() {
-        guard statusItem == nil else { return }
-        let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        s.menu = menu
-        statusItem = s
-        restoreStatusSymbol()
+        installed = true
+        applyMenuBarIconSetting()
+    }
+
+    func setMenuBarIconVisible(_ visible: Bool) {
+        defaults.set(visible, forKey: Self.showMenuBarIconKey)
+        log("menu bar icon = \(visible)")
+        applyMenuBarIconSetting()
+    }
+
+    func applyMenuBarIconSetting() {
+        guard installed else { return }
+        if Self.showMenuBarIcon(in: defaults) {
+            guard statusItem == nil else { return }
+            let s = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            s.menu = menu
+            statusItem = s
+            restoreStatusSymbol()
+        } else if let s = statusItem {
+            statusItem = nil
+            NSStatusBar.system.removeStatusItem(s)
+        }
     }
 
     /// Signal a durable correction without replacing the recording overlay. The menu row
@@ -211,13 +245,14 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     private func setStatusSymbol(_ name: String, description: String,
                                  tint: NSColor?, toolTip: String) {
+        guard let button = statusItem?.button else { return }
         let image = NSImage(systemSymbolName: name, accessibilityDescription: description)
             ?? NSImage(systemSymbolName: Self.normalSymbol, accessibilityDescription: description)
         image?.isTemplate = true
-        statusItem?.button?.image = image
-        statusItem?.button?.contentTintColor = tint
-        statusItem?.button?.toolTip = toolTip
-        statusItem?.button?.title = ""       // never widen the status item with text
+        button.image = image
+        button.contentTintColor = tint
+        button.toolTip = toolTip
+        button.title = ""       // never widen the status item with text
     }
 
     /// Live partial text in the pill. A checkbox, not a mode: it changes what the overlay
@@ -409,6 +444,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         Polisher.testInert = true
         Prompter.testInert = true
         let m = StatusMenu.shared
+        let savedMenuBarIcon = UserDefaults.standard.object(forKey: StatusMenu.showMenuBarIconKey)
         m.install()
         let savedMode = UserDefaults.standard.string(forKey: "mode")
         let savedActive = m.sessionActive
@@ -452,6 +488,9 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         func fire(_ it: NSMenuItem) { _ = NSApp.sendAction(it.action!, to: it.target, from: it) }
         func opened() { m.menuNeedsUpdate(m.menu) }   // what AppKit does before it shows
 
+        m.setMenuBarIconVisible(false)
+        check("hidden menu bar icon removes status item", m.statusItem == nil && !m.isVisible)
+        m.setMenuBarIconVisible(true)
         check("status item button", m.statusItem?.button != nil)
         check("template symbol image", m.statusItem?.button?.image?.isTemplate == true)
         check("status item stays icon-only", m.statusItem?.button?.title.isEmpty == true)
@@ -632,6 +671,9 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             // R-5: a test must never change the mode the app comes back up in.
             if let savedMode { UserDefaults.standard.set(savedMode, forKey: "mode") }
             else { UserDefaults.standard.removeObject(forKey: "mode") }
+            if let savedMenuBarIcon { UserDefaults.standard.set(savedMenuBarIcon, forKey: StatusMenu.showMenuBarIconKey) }
+            else { UserDefaults.standard.removeObject(forKey: StatusMenu.showMenuBarIconKey) }
+            m.applyMenuBarIconSetting()
             m.sessionActive = savedActive
             m.handsFreeActive = savedHandsFree
             m.retryAvailable = savedRetryAvailable

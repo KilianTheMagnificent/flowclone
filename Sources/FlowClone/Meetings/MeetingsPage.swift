@@ -7,6 +7,7 @@ struct MeetingsPage: View {
     @State private var tab: String
     @State private var deleting = false
     @State private var dropTargeted = false
+    @State private var showGitHubSettings = false
     @State private var sidebarWidth: CGFloat = 340
     @State private var dragStartWidth: CGFloat?
 
@@ -17,7 +18,12 @@ struct MeetingsPage: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            MeetingsSidebarPane(meetings: meetings, selectNote: selectNote, importAudio: presentAudioImporter)
+            MeetingsSidebarPane(
+                meetings: meetings,
+                showGitHubSettings: $showGitHubSettings,
+                selectNote: selectNote,
+                importAudio: presentAudioImporter
+            )
                 .frame(width: sidebarWidth)
             Rectangle()
                 .fill(Theme.divider)
@@ -32,7 +38,12 @@ struct MeetingsPage: View {
                         }
                         .onEnded { _ in dragStartWidth = nil }
                 )
-            MeetingDetailPane(meetings: meetings, tab: $tab, requestDelete: { deleting = true })
+            MeetingDetailPane(
+                meetings: meetings,
+                tab: $tab,
+                requestDelete: { deleting = true },
+                openGitHubSetup: { withAnimation { showGitHubSettings = true } }
+            )
                 .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
         .overlay {
@@ -149,6 +160,7 @@ struct MeetingsPage: View {
 
 private struct MeetingsSidebarPane: View {
     let meetings: MeetingCoordinator
+    @Binding var showGitHubSettings: Bool
     let selectNote: (UUID, String) -> Void
     let importAudio: () -> Void
     @State private var inPersonTitle = ""
@@ -209,6 +221,7 @@ private struct MeetingsSidebarPane: View {
                         .foregroundStyle(Theme.muted)
                 }
                 MeetingsStatusHeader(meetings: meetings, selectNote: selectNote)
+                MeetingsGitHubCard(meetings: meetings, expanded: $showGitHubSettings)
                 MeetingsCalendarCard(meetings: meetings)
                 UpcomingMeetingsCard(meetings: meetings)
                 PastNotesCard(meetings: meetings, selectNote: selectNote)
@@ -352,6 +365,254 @@ private struct MeetingsCalendarCard: View {
     }
 }
 
+private struct MeetingsGitHubCard: View {
+    @Bindable var meetings: MeetingCoordinator
+    @Binding var expanded: Bool
+    @State private var tokenDraft = ""
+    @State private var repoDraft = ""
+    @State private var folderDraft = GitHubPublishConfig.defaultFolder
+    @State private var branchDraft = ""
+
+    private var summaryBadge: (text: String, color: Color) {
+        if !meetings.githubConnected {
+            return ("Off", Theme.muted)
+        }
+        guard let repo = meetings.githubConfig.parsedRepo else {
+            return ("Choose repo", FeedbackKind.warning.color)
+        }
+        if meetings.githubConfig.autoPublish {
+            return ("Auto · \(repo.name)", Theme.success)
+        }
+        return (repo.name, Theme.muted)
+    }
+
+    private var repoPickerOptions: [(value: String, title: String)] {
+        var options: [(value: String, title: String)] = []
+        var seen = Set<String>()
+        if let current = meetings.githubConfig.parsedRepo {
+            let key = current.fullName.lowercased()
+            seen.insert(key)
+            options.append((current.fullName, current.fullName))
+        }
+        for repo in meetings.githubRepos {
+            let key = repo.fullName.lowercased()
+            if seen.insert(key).inserted {
+                let label = repo.isPrivate ? "\(repo.fullName) (Private)" : repo.fullName
+                options.append((repo.fullName, label))
+            }
+        }
+        return options
+    }
+
+    private func syncDraftsFromConfig() {
+        repoDraft = meetings.githubConfig.repository
+        folderDraft = meetings.githubConfig.folder
+        branchDraft = meetings.githubConfig.branch
+    }
+
+    private func saveDestination() {
+        Task {
+            let ok = await meetings.configureGitHubRepository(repoDraft, branch: branchDraft, folder: folderDraft)
+            if ok { syncDraftsFromConfig() }
+        }
+    }
+
+    var body: some View {
+        let badge = summaryBadge
+        SectionCard {
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !meetings.githubConnected {
+                        Text("Automatically save finished meeting notes as Markdown files in any GitHub repository you choose. Your access token stays privately in this Mac’s Keychain.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Create token on GitHub…") {
+                            guard !handsfreeSession else { return }
+                            NSWorkspace.shared.open(GitHubTokenValidator.newTokenURL)
+                        }
+                        .accessibilityIdentifier("githubCreateTokenButton")
+                        Text("Pick the repository you want, set Contents to Read and write, generate the token, and paste it below.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        SecureField("Paste GitHub access token", text: $tokenDraft)
+                            .accessibilityIdentifier("githubTokenField")
+                            .onSubmit {
+                                guard !meetings.githubConnecting,
+                                      GitHubTokenValidator.normalized(tokenDraft) != nil else { return }
+                                let submitted = tokenDraft
+                                Task {
+                                    await meetings.connectGitHub(token: submitted)
+                                    if meetings.githubConnected {
+                                        tokenDraft = ""
+                                        syncDraftsFromConfig()
+                                    }
+                                }
+                            }
+                        Button(meetings.githubConnecting ? "Connecting…" : "Connect GitHub") {
+                            let submitted = tokenDraft
+                            Task {
+                                await meetings.connectGitHub(token: submitted)
+                                if meetings.githubConnected {
+                                    tokenDraft = ""
+                                    syncDraftsFromConfig()
+                                }
+                            }
+                        }
+                        .prominent()
+                        .disabled(meetings.githubConnecting || GitHubTokenValidator.normalized(tokenDraft) == nil)
+                        .accessibilityIdentifier("githubConnectButton")
+                    } else {
+                        HStack(spacing: 8) {
+                            Label(
+                                meetings.githubConfig.connectedUsername.map { "@\($0)" } ?? "Connected",
+                                systemImage: "checkmark.circle.fill"
+                            )
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .accessibilityIdentifier("githubAccount")
+                            Spacer(minLength: 4)
+                            Button("Disconnect") {
+                                meetings.disconnectGitHub()
+                                tokenDraft = ""
+                            }
+                            .accessibilityIdentifier("githubDisconnectButton")
+                        }
+                        if !repoPickerOptions.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Repository").font(.caption).foregroundStyle(Theme.muted)
+                                ThemedMenuPicker(
+                                    label: "GitHub repository",
+                                    options: repoPickerOptions,
+                                    selection: Binding(
+                                        get: { meetings.githubConfig.repository },
+                                        set: { selected in
+                                            guard !selected.isEmpty else { return }
+                                            repoDraft = selected
+                                            Task {
+                                                let ok = await meetings.configureGitHubRepository(
+                                                    selected,
+                                                    branch: branchDraft,
+                                                    folder: folderDraft
+                                                )
+                                                if ok { syncDraftsFromConfig() }
+                                            }
+                                        }
+                                    )
+                                )
+                                .accessibilityIdentifier("githubRepoPicker")
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(repoPickerOptions.isEmpty ? "Repository" : "Or enter any repository")
+                                .font(.caption)
+                                .foregroundStyle(Theme.muted)
+                            TextField("owner/repo or GitHub URL", text: $repoDraft)
+                                .accessibilityIdentifier("githubRepoField")
+                                .onSubmit {
+                                    guard !meetings.githubConnecting,
+                                          GitHubRepoID.parse(repoDraft) != nil else { return }
+                                    saveDestination()
+                                }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Folder in repository").font(.caption).foregroundStyle(Theme.muted)
+                            TextField("meeting-notes (blank for top level)", text: $folderDraft)
+                                .accessibilityIdentifier("githubFolderField")
+                                .onSubmit {
+                                    guard !meetings.githubConnecting,
+                                          GitHubRepoID.parse(repoDraft) != nil else { return }
+                                    saveDestination()
+                                }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Branch (optional)").font(.caption).foregroundStyle(Theme.muted)
+                            TextField(
+                                meetings.githubConfig.defaultBranchCache.isEmpty
+                                    ? "Default branch (e.g. main)"
+                                    : "Default (\(meetings.githubConfig.defaultBranchCache))",
+                                text: $branchDraft
+                            )
+                            .accessibilityIdentifier("githubBranchField")
+                            .onSubmit {
+                                guard !meetings.githubConnecting,
+                                      GitHubRepoID.parse(repoDraft) != nil else { return }
+                                saveDestination()
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            Button(meetings.githubConnecting ? "Checking…" : "Save destination", action: saveDestination)
+                                .prominent()
+                                .disabled(meetings.githubConnecting || GitHubRepoID.parse(repoDraft) == nil)
+                                .accessibilityIdentifier("githubSaveDestinationButton")
+                            Button(meetings.githubLoadingRepos ? "Refreshing…" : "Refresh repos") {
+                                Task { await meetings.refreshGitHubRepositories() }
+                            }
+                            .disabled(meetings.githubLoadingRepos)
+                            .accessibilityIdentifier("githubRefreshReposButton")
+                        }
+                        Hairline()
+                        Toggle("Automatically publish finished meetings", isOn: $meetings.githubConfig.autoPublish)
+                            .disabled(!meetings.githubConfig.isConfigured)
+                            .accessibilityIdentifier("githubAutoPublishToggle")
+                            .onChange(of: meetings.githubConfig.autoPublish) { _, _ in meetings.saveGitHubConfig() }
+                        Text("Uploads a Markdown file to GitHub as soon as each meeting finishes summarizing.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle("Include full transcript", isOn: $meetings.githubConfig.includeTranscript)
+                            .accessibilityIdentifier("githubIncludeTranscriptToggle")
+                            .onChange(of: meetings.githubConfig.includeTranscript) { _, _ in meetings.saveGitHubConfig() }
+                        Text("Turn off to publish only the summary, action items, and your notes.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let error = meetings.githubError {
+                        Feedback(text: error, kind: .error)
+                            .accessibilityIdentifier("githubError")
+                    } else if !meetings.githubStatus.isEmpty {
+                        Feedback(text: meetings.githubStatus, kind: .success)
+                            .accessibilityIdentifier("githubStatus")
+                    }
+                }
+                .padding(.top, 10)
+            } label: {
+                HStack(spacing: 8) {
+                    Text("GitHub")
+                        .font(Theme.sectionFont)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 4)
+                    Text(badge.text)
+                        .font(.caption)
+                        .foregroundStyle(badge.color)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .accessibilityIdentifier("githubSectionDisclosure")
+        }
+        .onAppear {
+            meetings.refreshGitHubConnectionState()
+            syncDraftsFromConfig()
+        }
+        .onChange(of: expanded) { _, isOpen in
+            if isOpen {
+                meetings.refreshGitHubConnectionState()
+                syncDraftsFromConfig()
+                if meetings.githubConnected, meetings.githubRepos.isEmpty {
+                    Task { await meetings.refreshGitHubRepositories() }
+                }
+            }
+        }
+        .onChange(of: meetings.githubConfig) { _, _ in
+            syncDraftsFromConfig()
+        }
+    }
+}
+
 private struct UpcomingMeetingsCard: View {
     let meetings: MeetingCoordinator
     @State private var showAll = false
@@ -475,13 +736,32 @@ private struct MeetingDetailPane: View {
     let meetings: MeetingCoordinator
     @Binding var tab: String
     let requestDelete: () -> Void
+    let openGitHubSetup: () -> Void
     @State private var editingTitleID: UUID?
     @State private var titleDraft = ""
+
+    private func githubButtonTitle(
+        for note: MeetingNote,
+        isPublishing: Bool,
+        unsynced: Bool
+    ) -> String {
+        if isPublishing { return "Publishing…" }
+        guard let state = note.githubPublish else { return "Push to GitHub" }
+        switch state.status {
+        case .published:
+            return unsynced ? "Update GitHub" : "Sync GitHub"
+        case .pendingRetry, .failed:
+            return "Retry GitHub"
+        }
+    }
 
     var body: some View {
         if let note = meetings.selectedNote {
             let actionItems = note.actionItems
-            VStack(alignment: .leading, spacing: 16) {
+            let isPublishing = meetings.publishingToGitHub.contains(note.id)
+            let githubReady = meetings.githubConnected && meetings.githubConfig.isConfigured
+            let unsynced = meetings.hasUnsyncedGitHubChanges(for: note)
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         if editingTitleID == note.id {
@@ -516,10 +796,83 @@ private struct MeetingDetailPane: View {
                         Text("\(MeetingsDateFormat.dateTime(note.startedAt))\(note.isInPerson ? " · In-person (microphone only)" : "")").font(.caption).foregroundStyle(Theme.muted)
                     }
                     Spacer()
+                    if githubReady {
+                        Button(githubButtonTitle(for: note, isPublishing: isPublishing, unsynced: unsynced)) {
+                            Task { await meetings.publishNoteToGitHub(note.id) }
+                        }
+                        .disabled(isPublishing || meetings.processing.contains(note.id) || note.phase == .recording)
+                        .accessibilityIdentifier("publishMeetingToGitHub")
+                    } else {
+                        Button("GitHub…", action: openGitHubSetup)
+                            .accessibilityIdentifier("openGitHubSetupButton")
+                    }
                     Button("Export") { export(note) }
                     Button(action: requestDelete) { Image(systemName: "trash") }
                         .accessibilityLabel("Delete meeting")
-                        .disabled(meetings.busy || !meetings.processing.isEmpty)
+                        .disabled(meetings.busy || !meetings.processing.isEmpty || !meetings.publishingToGitHub.isEmpty)
+                }
+                if isPublishing {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Publishing to \(meetings.githubConfig.repository)…")
+                            .font(.caption)
+                            .foregroundStyle(Theme.muted)
+                    }
+                    .accessibilityIdentifier("meetingGitHubStatus")
+                } else if let state = note.githubPublish {
+                    switch state.status {
+                    case .published:
+                        HStack(spacing: 10) {
+                            Label(
+                                "Published to \(state.repository) · \(state.path)",
+                                systemImage: "checkmark.circle.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(Theme.success)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .accessibilityIdentifier("meetingGitHubStatus")
+                            if unsynced {
+                                Text("Unsaved edits")
+                                    .font(.caption)
+                                    .foregroundStyle(FeedbackKind.warning.color)
+                            }
+                            if let url = state.htmlURL {
+                                Button {
+                                    guard !handsfreeSession else { return }
+                                    NSWorkspace.shared.open(url)
+                                } label: {
+                                    HStack(spacing: 3) {
+                                        Text("View on GitHub")
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.system(size: 10, weight: .semibold))
+                                    }
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(Theme.accent)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("viewMeetingOnGitHub")
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    case .pendingRetry:
+                        Label(
+                            "Waiting to publish to \(state.repository) (retrying automatically)",
+                            systemImage: "clock.arrow.circlepath"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(FeedbackKind.warning.color)
+                        .accessibilityIdentifier("meetingGitHubStatus")
+                    case .failed:
+                        Label(
+                            "GitHub publish failed: \(state.error ?? "Unknown error")",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(FeedbackKind.error.color)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("meetingGitHubStatus")
+                    }
                 }
                 ThemedSegmented(options: [("Summary", "Summary"), ("Transcript", "Transcript"), ("My notes", "My notes")],
                                 selection: $tab, label: "Meeting view")

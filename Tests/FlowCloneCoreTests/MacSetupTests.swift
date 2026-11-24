@@ -171,4 +171,29 @@ final class MacSetupTests: XCTestCase {
         XCTAssertFalse(LaunchAtLogin.isTranslocated("/Applications/FlowClone.app"))
         XCTAssertFalse(LaunchAtLogin.isTranslocated("/Users/someone/Applications/FlowClone.app"))
     }
+
+    // MARK: Menu bar icon
+
+    func testMenuBarIconDefaultsOffAndFollowsTheSwitch() {
+        let suite = ScratchDefaults.name("menu-bar-icon")
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(StatusMenu.showMenuBarIcon(in: defaults))
+        defaults.set(true, forKey: StatusMenu.showMenuBarIconKey)
+        XCTAssertTrue(StatusMenu.showMenuBarIcon(in: defaults))
+        defaults.set(false, forKey: StatusMenu.showMenuBarIconKey)
+        XCTAssertFalse(StatusMenu.showMenuBarIcon(in: defaults))
+    }
+
+    @MainActor
+    func testInstallingStatusMenuWhileHiddenLeavesNoStatusItem() {
+        let suite = ScratchDefaults.name("menu-bar-icon-install")
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let menu = StatusMenu(defaults: defaults)
+        menu.install()
+        XCTAssertFalse(menu.isVisible)
+        menu.setMenuBarIconVisible(false)
+        XCTAssertFalse(menu.isVisible)
+    }
 }
