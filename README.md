@@ -11,7 +11,8 @@ A personal project, version 0.3. Its author uses it every day; a few friends use
 
 - Apple Silicon Macs on macOS 14 or newer. Intel Macs are not supported.
 - English only.
-- Not notarized by Apple, so the first launch needs **Open Anyway** (below).
+- Not notarized by Apple. The one-line install below opens without a warning; a copy
+  downloaded by hand needs **Open Anyway** once.
 - Prompt mode, text transforms and written meeting summaries use Apple Intelligence
   (macOS 26 or newer) or, if you add your own key, Claude. Without either, dictation and
   Clean mode still work and meeting notes list key excerpts.
@@ -20,21 +21,37 @@ A personal project, version 0.3. Its author uses it every day; a few friends use
 
 ## Install
 
+Open Terminal (in Applications > Utilities), paste this line and press Return:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KilianTheMagnificent/flowclone/main/install.sh | bash
+```
+
+[The script](install.sh) downloads the latest release, checks its checksum and that it is
+signed by the maintainer, puts `FlowClone.app` into Applications and opens it. Then:
+
+1. Follow the three steps in the window: allow Microphone, Accessibility and Input
+   Monitoring, then relaunch when asked.
+2. The first launch downloads the speech model (about 630 MB, from huggingface.co; keep about
+   1 GB free). The top right of the window shows progress until it says **Ready to dictate**.
+3. Click into any text field, hold **fn** (or Control+Option), speak, release.
+
+FlowClone then keeps itself up to date ([Releases and updates](#releases-and-updates)).
+
+### Installing by hand
+
+FlowClone is not notarized by Apple (that needs a paid developer account), so macOS refuses
+to open a copy downloaded with a browser until you allow it once. The Terminal line above
+avoids that; this route does not:
+
 1. Download `FlowClone-<version>-<build>.zip` from the
    [latest release](https://github.com/KilianTheMagnificent/flowclone-updates/releases/latest).
 2. Unzip it and drag `FlowClone.app` into Applications. Do not open it from Downloads:
    macOS then runs it from a temporary folder where permissions and updates do not stick.
-3. Open FlowClone. macOS refuses the first time because the app is not notarized. On macOS 15
-   or newer go to System Settings > Privacy & Security, scroll down and click **Open Anyway**;
-   on macOS 14 right-click the app and choose Open.
-4. Follow the three steps in the window: allow Microphone, Accessibility and Input
-   Monitoring, then relaunch when asked.
-5. The first launch downloads the speech model (about 630 MB, from huggingface.co; keep about
-   1 GB free). The top right of the window shows progress until it says **Ready to dictate**.
-6. Click into any text field, hold **fn** (or Control+Option), speak, release.
-
-The zip's `README.txt` has the same steps in more detail. FlowClone then keeps itself up to
-date ([Releases and updates](#releases-and-updates)).
+3. Open FlowClone. macOS refuses the first time. On macOS 15 or newer go to System Settings >
+   Privacy & Security, scroll down and click **Open Anyway**; on macOS 14 right-click the app
+   and choose Open.
+4. Continue with the three steps above. The zip's `README.txt` has them in more detail.
 
 ## What leaves the Mac
 
@@ -101,7 +118,8 @@ that is newer, signed by the same Apple team, and runs on that Mac's macOS and p
 - **Do not rename or delete** the feed repository or the GitHub account: the feed address is
   inside every installed copy.
 - **Signing.** Builds are signed with an Apple Development certificate (team `36B25Z964W`,
-  expires 2027-07-30) and are not notarized, so a first install needs **Open Anyway**. A new
+  expires 2027-07-30) and are not notarized, so a copy downloaded with a browser needs
+  **Open Anyway** once. A new
   certificate from the same team keeps updates working. A Developer ID certificate and
   notarization (paid Apple Developer Program) would remove the warning; `build.sh` already
   prefers a Developer ID certificate when one is in the Keychain but has no notarization step.

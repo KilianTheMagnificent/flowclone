@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Everything else stays private. Add a path here only after reading the file for personal data.
 PUBLIC_PATHS = [
-    "Sources", "Tests", "Package.swift", "Package.resolved", "build.sh", "test.sh",
+    "Sources", "Tests", "Package.swift", "Package.resolved", "build.sh", "test.sh", "install.sh",
     "app", "assets", "tools", "spikes/say8.wav", "docs/meeting-notes/google-sign-in.md",
     "README.md", "LICENSE", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".gitignore",
 ]
