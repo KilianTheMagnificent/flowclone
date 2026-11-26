@@ -55,18 +55,29 @@ avoids that; this route does not:
 
 ## What leaves the Mac
 
-Without a Claude API key: nothing you say. Speech recognition, cleanup and summaries run on
-the Mac; the app only downloads its speech model and its own updates, reads your calendar if
-you connect one, and uploads meeting notes to GitHub only if you connect a GitHub repository
-and turn on publishing.
+Without a Claude API key and without a GitHub repository connected, nothing you say or
+dictate leaves the Mac. Speech recognition, cleanup and summaries run on the Mac; the app
+only downloads its speech model (from huggingface.co) and its own updates (from GitHub), and
+reads your calendar from Google or macOS if you connect one.
 
-With your own key saved (Settings > Dictation > Smart corrections), text is sent to
-Anthropic over HTTPS: a Clean dictation that needs more than basic cleanup (short, already
-clean ones stay local), every Prompt mode dictation, your dictionary words and learned
-corrections, and meeting transcripts for the summary. Audio is never sent. Dictation into a
-password field, expanded private snippets and rewrites that used on-screen context stay on
-the Mac. **Model: Built-in model** keeps all dictation local while leaving the key saved;
-Meetings has its own **Summary model** choice.
+Two optional features send text off the Mac. Audio is never sent:
+
+- **GitHub meeting notes.** Once you connect a GitHub repository on the Meetings page (with
+  a personal access token kept in your Keychain), a meeting's notes are uploaded to it when
+  you press **Push to GitHub** on that meeting, and after every meeting if you also turn on
+  **Automatically publish finished meetings** (off by default). The uploaded Markdown file
+  has the meeting title, date, invitee names, the summary, your own notes and, unless you
+  turn off **Include full transcript** (on by default), the full transcript of what was
+  said. Pick a private repository if the meetings are private.
+- **Your own Claude key.** With it saved (Settings > Dictation > Smart corrections), text is
+  sent to Anthropic over HTTPS: a Clean dictation that needs more than basic cleanup (short,
+  already clean ones stay local), every Prompt mode dictation, your dictionary words and
+  learned corrections, and, for the meeting summary, the transcript with your notes, the
+  meeting title and invitee names.
+
+With a Claude key, dictation into a password field, expanded private snippets and rewrites
+that used on-screen context still stay on the Mac. **Model: Built-in model** keeps all
+dictation local while leaving the key saved; Meetings has its own **Summary model** choice.
 
 ## Smart corrections
 
@@ -95,7 +106,7 @@ What happens without you:
 
 Still yours to do: keep FlowClone running (it opens at login) and the Mac awake or woken during the meeting; leave early with **Stop and summarize** if you do not want the rest. While the Google project is in Testing, Google ends the sign-in every 7 days ([details](docs/meeting-notes/google-sign-in.md)); macOS asks about once a month to keep allowing screen and system-audio recording. Local speech recognition is English. Remote speakers share a system-audio label.
 
-The meeting view contains Summary, Transcript and My notes, with local Markdown export, optional automatic publishing to any GitHub repository (using a personal access token stored in your Mac's Keychain), resume, retry and deletion (including audio). Notes and recoverable audio stay in `~/Library/Application Support/FlowClone/Meetings` until deleted. Summaries use an on-device model when available and clearly labeled key excerpts otherwise.
+The meeting view contains Summary, Transcript and My notes, with local Markdown export, optional publishing to any GitHub repository (a **Push to GitHub** button per meeting, or automatic publishing; both upload the notes and, unless turned off, the transcript, using a personal access token stored in your Mac's Keychain; see [What leaves the Mac](#what-leaves-the-mac)), resume, retry and deletion (including audio). Notes and recoverable audio stay in `~/Library/Application Support/FlowClone/Meetings` until deleted. Summaries use an on-device model when available and clearly labeled key excerpts otherwise.
 
 Hands-free mock: start the hidden test app with `tools/handsfree-flowclone.sh --with-model`, then use `meeting-mock` with `{"audio":["/absolute/alex.aiff","/absolute/maya.aiff"],"output":"/absolute/scratch/output"}`. It simulates calendar time and audio hardware, runs the production audio writer, local recognizer, summarizer and storage, and renders the Meetings page. Poll `meeting-result`. It never reads your calendar or microphone.
 
@@ -165,7 +176,7 @@ hidden app still refuses model downloads.
 Andre Romero-Carey directs development with AI coding agents (Claude, Codex and Gemini) and
 checks the results by running them, rather than writing Swift by hand.
 
-- Every change has to pass the test suite (about 570 tests, warnings as errors) and is then
+- Every change has to pass the test suite (about 590 tests, warnings as errors) and is then
   seen working in a hidden copy of the app that dictates a recorded sentence.
 - Larger features were also run for real on his Mac: meeting recording was tested against
   real calendar events, including a crash and a microphone change in the middle.

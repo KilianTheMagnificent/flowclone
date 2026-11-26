@@ -1,8 +1,10 @@
 FlowClone — hold a key, talk, release, cleaned text is pasted where your cursor is.
-Speech recognition runs on your Mac. Nothing you say leaves it unless you add your own
-Claude API key; with a key, the text (never the audio) of dictations that need more than
-basic cleanup, Prompt mode dictations, your dictionary words and meeting transcripts is
-sent to Anthropic.
+Speech recognition runs on your Mac. Your voice is never sent anywhere, and the text of
+what you say leaves the Mac only through two optional features: your own Claude API key
+(then the text of dictations that need more than basic cleanup, Prompt mode dictations,
+your dictionary words and meeting transcripts, notes, titles and invitee names go to
+Anthropic) and publishing meeting notes to a GitHub repository you connect (then the
+notes, and by default the full transcript, go to that repository).
 
 REQUIREMENTS
 - Apple Silicon Mac (M1 or newer). Intel Macs are not supported.
@@ -25,9 +27,11 @@ INSTALL
      bottom > click "Open Anyway" next to FlowClone > Open.
    - macOS 14: right-click FlowClone.app > Open > Open.
    You only do this once.
-3. Grant Microphone and Accessibility when asked. Accessibility is required for the
-   hotkey and for pasting the text. If you dismissed a prompt, add FlowClone under
-   System Settings > Privacy & Security > Accessibility / Microphone and relaunch.
+3. Follow the three steps in the FlowClone window and allow Microphone, Accessibility and
+   Input Monitoring when asked. Accessibility is required for the hotkey and for pasting
+   the text. If you dismissed a prompt, add FlowClone under
+   System Settings > Privacy & Security > Accessibility / Input Monitoring / Microphone
+   and relaunch.
 4. The first launch downloads the speech model (about 630 MB). The top right of
    the FlowClone window shows progress; wait until it says "Ready to dictate".
    If the download fails, Settings > This Mac says why (offline, a blocked
